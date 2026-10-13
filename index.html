@@ -246,6 +246,12 @@ td .chip{display:inline-flex;align-items:center;gap:6px;margin:2px 8px 2px 0}
   .stage-bar .sbtn:nth-of-type(4){margin-left:auto}
   .hud span:last-child{display:none}
 }
+/* agrandissement de la maquette : vrai plein écran si possible, sinon plein écran simulé (iPhone, applis mobiles) */
+.stage:fullscreen{height:100%;border-radius:0}
+.stage.max{position:fixed;top:0;left:0;right:0;bottom:0;width:100%;height:100%;z-index:1000;margin:0;border-radius:0;box-shadow:none}
+.stage.max .hud{top:calc(12px + env(safe-area-inset-top,0px))}
+.stage.max .stage-bar{bottom:calc(12px + env(safe-area-inset-bottom,0px));left:calc(12px + env(safe-area-inset-left,0px));right:calc(12px + env(safe-area-inset-right,0px))}
+html.stage-max,html.stage-max body{overflow:hidden;overscroll-behavior:none}
 @media (prefers-reduced-motion: reduce){ *{transition:none!important;animation:none!important} }
 </style>
 
@@ -10406,9 +10412,53 @@ const Stage = (() => {
     tmpV.copy(n.position); tmpV.y += n.userData.top; tmpV.project(camera);
     return {x:(tmpV.x+1)/2*mounted.clientWidth, y:(1-tmpV.y)/2*mounted.clientHeight};
   }
-  async function fullscreen(el){ try { if (document.fullscreenElement) await document.exitFullscreen(); else await el.requestFullscreen(); } catch(e){} }
+  const nativeFs = () => document.fullscreenElement || document.webkitFullscreenElement || null;
+  let savedScroll = 0;
+  function setMax(el, on){
+    if (on) savedScroll = window.scrollY;
+    el.classList.toggle('max', on);
+    document.documentElement.classList.toggle('stage-max', on);
+    if (!on) window.scrollTo(0, savedScroll);
+    afterResize();
+  }
+  function afterResize(){
+    requestAnimationFrame(() => { resize(); if (spec) fit(spec.cam); syncFullIcon(); });
+  }
+  function isExpanded(el){ return !!nativeFs() || (el && el.classList.contains('max')); }
+  function syncFullIcon(){
+    const b = document.getElementById('sFull'), st = document.getElementById('stage');
+    if (!b || !st) return;
+    const on = isExpanded(st);
+    b.innerHTML = on ? ICON.min : ICON.full;
+    b.setAttribute('aria-label', on ? 'Quitter le plein écran' : 'Plein écran');
+    b.setAttribute('aria-pressed', String(on));
+  }
+  async function fullscreen(el){
+    if (nativeFs()){                                     // sortir du vrai plein écran
+      try { await (document.exitFullscreen ? document.exitFullscreen() : document.webkitExitFullscreen()); } catch(e){}
+      return;
+    }
+    if (el.classList.contains('max')){ setMax(el, false); return; }   // sortir du mode simulé
+    const req = el.requestFullscreen || el.webkitRequestFullscreen;
+    if (req){
+      try {
+        await req.call(el);
+        await new Promise(r => setTimeout(r, 250));
+        if (nativeFs()) return;                          // le vrai plein écran a fonctionné
+      } catch(e){}
+    }
+    setMax(el, true);                                    // repli : plein écran simulé
+  }
+  function exitMax(){
+    const st = document.querySelector('.stage.max');
+    if (st) setMax(st, false);
+    document.documentElement.classList.remove('stage-max');
+  }
+  document.addEventListener('fullscreenchange', afterResize);
+  document.addEventListener('webkitfullscreenchange', afterResize);
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') exitMax(); });
 
-  return {mount, load, go, togglePlay, setPlaying, resetView, highlight, screenPos, fullscreen, get playing(){return playing;}, get ok(){ return ready; }, init};
+  return {mount, load, go, togglePlay, setPlaying, resetView, highlight, screenPos, fullscreen, exitMax, syncFullIcon, get playing(){return playing;}, get ok(){ return ready; }, init};
 })();
 
 /* =====================================================================
@@ -10528,7 +10578,8 @@ const current = () => (location.hash.slice(1) || 'accueil');
 const ICON = {
   prev:'<svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg>', next:'<svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>',
   play:'<svg viewBox="0 0 24 24"><path d="M7 5l12 7-12 7z" fill="currentColor"/></svg>', pause:'<svg viewBox="0 0 24 24"><path d="M8 5v14M16 5v14"/></svg>',
-  reset:'<svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/></svg>', full:'<svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>'
+  reset:'<svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/></svg>', full:'<svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>',
+  min:'<svg viewBox="0 0 24 24"><path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/></svg>'
 };
 function stageHTML(cls='', hud='Maquette 3D interactive'){
   return `<figure class="stage ${cls}" id="stage"><div class="stage-canvas" id="stageCanvas"></div>
@@ -10798,6 +10849,7 @@ const main = document.getElementById('main');
 function route(){
   const id = current();
   closeMenu();
+  if (Stage.exitMax) Stage.exitMax();
   if (byId[id]) { viewPattern(byId[id]); document.title = byId[id].name + ' · Atlas des Design Patterns'; }
   else if (id === 'guide') { viewGuide(); document.title = 'Quel pattern choisir ? · Atlas des Design Patterns'; }
   else if (id === 'catalogue') { viewCatalog(); document.title = 'Catalogue · Atlas des Design Patterns'; }
